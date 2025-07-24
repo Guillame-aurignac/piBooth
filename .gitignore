@@ -1,0 +1,7 @@
+*.cfg
+.env
+photos/*
+lib/
+lib64
+bin/
+include/
