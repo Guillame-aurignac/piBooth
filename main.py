@@ -1,7 +1,7 @@
 # Raspberry pi 5 based photo booth
 # Guillaume AURIGNAC
 # 2025
-# v1.0
+# v1.0.1
 
 import copy
 import cv2
@@ -194,10 +194,17 @@ picam2.start()
 cv2.namedWindow("window", cv2.WND_PROP_FULLSCREEN)
 cv2.setWindowProperty("window",cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_FULLSCREEN)
 
+# Define GPIO
 BUTTON_PIN = 27
 chip = gpiod.Chip('gpiochip4')
 button_line = chip.get_line(BUTTON_PIN)
 button_line.request(consumer="Button", type=gpiod.LINE_REQ_DIR_IN)
+
+# Define font for HMI
+font_title = ImageFont.truetype("fonts/Carnevalee Freakshow.ttf", 250)
+font_subtitle = ImageFont.truetype("fonts/Carnevalee Freakshow.ttf", 120)
+font_number = ImageFont.truetype("fonts/Carnevalee Freakshow.ttf", 1000)
+font_debug = ImageFont.truetype("fonts/arial.ttf", 20)
 
 # DEBUG mode to display debug info
 DEBUG = False
@@ -215,10 +222,22 @@ idle_timeout = 15 # in seconds
 displayLast = False
 last_timeout = 5
 
-font_title = ImageFont.truetype("fonts/Carnevalee Freakshow.ttf", 250)
-font_subtitle = ImageFont.truetype("fonts/Carnevalee Freakshow.ttf", 120)
-font_number = ImageFont.truetype("fonts/Carnevalee Freakshow.ttf", 1000)
-font_debug = ImageFont.truetype("fonts/arial.ttf", 20)
+# CPU temp monitooring vars
+temp_check_interval = 1 # in seconds
+t_prev_temp = 0
+cpu_temp = os.popen('vcgencmd measure_temp').readline()
+
+# Network check vars
+network_check_interval = 60 # in seconds
+t_prev_net = 0
+
+# Disk space left monitoring
+# at interval to catch low disk space if other
+# process are writing
+# and every time image is saved
+disk_check_interval = 5*60 # in seconds
+t_prev_disk = 0
+disk_used_space = disk_usage('.').per_used
 
 t_prev = time.time()
 t_prev_idle = 0
@@ -253,18 +272,15 @@ while True:
         # position text at 2% of the monitor width to the right edge
         x = monitor.width - int(monitor.width*0.02)
 
-        # fps
-        draw.text((x,70), f"fps: {fps}", fill=(255,0,0), font=font_debug, anchor="rs")
-        # photo count
-        draw.text((x,100), f"Photo count: {FILENAME_INDEX-1}", fill=(255,0,0), font=font_debug, anchor="rs")
-        # if image is mirrored
-        draw.text((x,130), f"Reversed: {REVERSED}", fill=(255,0,0), font=font_debug, anchor="rs")
-        #cpu temp
-        cpu_temp = os.popen('vcgencmd measure_temp').readline()
-        draw.text((x,160), cpu_temp, fill=(255,0,0), font=font_debug, anchor="rs")
-        #free disk space
-        text = f"Disk used: {disk_usage('.').per_used}%"
-        draw.text((x,190), text, fill=(255,0,0), font=font_debug, anchor="rs")
+        texts = [f"fps: {fps}",
+                 f"Photo count: {FILENAME_INDEX-1}",
+                 f"Reversed: {REVERSED}",
+                 cpu_temp,
+                 f"Disk used: {disk_used_space}%"]
+
+        # print debug info
+        for i in range(len(texts)):
+            draw.text((x,70+30*i), texts[i], fill=(255,0,0), font=font_debug, anchor="rs")
 
     if inCountDown:
         org = int(monitor.width/2),int(monitor.height/2)
@@ -283,10 +299,14 @@ while True:
             # add effect from file
             im_filter = effect(im_filter)
 
+            # save image to disk
             cv2.imwrite(filename, im_filter)
+            # update disk space used
+            disk_used_space = disk_usage('.').per_used
 
             if USE_IMMICH:
                 upload(filename)
+
             inCountDown = False
             displayLast = True
             t_prev_last = time.time()
@@ -326,3 +346,12 @@ while True:
 
     elif k == ord('r'):
         REVERSED = not REVERSED
+
+    # === Timers ===
+    if (time.time() - t_prev_temp) > temp_check_interval:
+        cpu_temp = os.popen('vcgencmd measure_temp').readline()
+        t_prev_temp = time.time()
+
+    if (time.time() - t_prev_disk) > disk_check_interval:
+        disk_used_space = disk_usage('.').per_used
+        t_prev_temp = time.time()
