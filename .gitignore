@@ -1,6 +1,7 @@
 *.cfg
 .env
 photos/*
+raw/*
 lib/
 lib64
 bin/

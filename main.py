@@ -210,6 +210,8 @@ font_debug = ImageFont.truetype("fonts/arial.ttf", 20)
 DEBUG = False
 # reverse the image
 REVERSED = True
+# apply filter to image
+FILTERED = True
 
 inCountDown = False
 count_down_timeout = 6 # in seconds
@@ -275,6 +277,7 @@ while True:
         texts = [f"fps: {fps}",
                  f"Photo count: {FILENAME_INDEX-1}",
                  f"Reversed: {REVERSED}",
+                 f"Filtered: {FILTERED}",
                  cpu_temp,
                  f"Disk used: {disk_used_space}%"]
 
@@ -292,12 +295,19 @@ while True:
         if count_down_timeout - (time.time() - t_countdown) <= 0:
             # take picture
             filename = f"photos/{FILENAME_BASE}{FILENAME_INDEX}.jpg"
+            filename_raw = f"raw/{FILENAME_BASE}{FILENAME_INDEX}.jpg"
             FILENAME_INDEX += 1
 
-            # sepia filter
-            im_filter = sepia(im)
-            # add effect from file
-            im_filter = effect(im_filter)
+            if FILTERED:
+                # save unfiltered image
+                cv2.imwrite(filename_raw, im)
+                
+                # sepia filter
+                im_filter = sepia(im)
+                # add effect from file
+                im_filter = effect(im_filter)
+            else:
+                im_filter = copy.copy(im)
 
             # save image to disk
             cv2.imwrite(filename, im_filter)
@@ -346,6 +356,9 @@ while True:
 
     elif k == ord('r'):
         REVERSED = not REVERSED
+
+    elif k == ord('f'):
+        FILTERED = not FILTERED
 
     # === Timers ===
     if (time.time() - t_prev_temp) > temp_check_interval:
