@@ -5,19 +5,20 @@
 
 import copy
 import cv2
+import datetime
 import json
 import numpy as np
 import os
-from pprint import *
 import random
 import requests
 import gpiod # Import Raspberry Pi 5 GPIO library
 import time
 from collections import namedtuple
 from datetime import datetime
-from dotenv import load_dotenv, dotenv_values
+from dotenv import dotenv_values
 from picamera2 import Picamera2
 from PIL import Image, ImageDraw, ImageFont, ImageChops
+from pprint import *
 from screeninfo import get_monitors
 
 
@@ -43,7 +44,6 @@ FILENAME_BASE = "booth_"
 FILENAME_INDEX = len(os.listdir("photos/"))+1
 
 # loading variables from .env file
-# load_dotenv()
 config = dotenv_values(".env")
 
 k = config.keys()
@@ -95,6 +95,13 @@ def effect(image):
         #if effects_file == "booth_effect_1.png":
         #    pil_im = ImageChops.multiply(pil_effect, pil_im)
         #else:
+
+        # match size of filter with size of image
+        size_filter = pil_effect.size
+        size_img = pil_im.size
+        if size_filter != size_img:
+            pil_effect = pil_effect.resize(size_img[:2])
+
         pil_im.paste(pil_effect, (0, 0), pil_effect)
     
     # convert back to cv2 image
@@ -159,7 +166,7 @@ def upload(file):
 
 
 monitor = get_monitors()[0]
-camera_param = {"width": 1456, "height": 1088}
+camera_param = {"width": 1456, "height": 1088, "fps": 30}
 #camera_param = {"width": 640, "height": 480}
 
 delta_width = monitor.width - camera_param['width']
@@ -187,8 +194,21 @@ flash = np.full((monitor.height, monitor.width, 4), 255, dtype = np.uint8)
 
 cv2.startWindowThread()
 
+# Load warning logo
+icon_scale = int(monitor.height * 0.03)
+icons = {"hdd_warning": {"image": Image.open("images/hdd_warning.png").resize((icon_scale,icon_scale)), "displayed": False},
+         "hdd_critical": {"image": Image.open("images/hdd_critical.png").resize((icon_scale,icon_scale)), "displayed": False},
+         "no_network": {"image": Image.open("images/network.png").resize((icon_scale,icon_scale)), "displayed": True},
+         "temp_warning": {"image": Image.open("images/temp_warning.png").resize((icon_scale,icon_scale)), "displayed": False},
+         "temp_critical": {"image": Image.open("images/temp_critical.png").resize((icon_scale,icon_scale)), "displayed": False}}
+
+icon_padding = int(monitor.width*0.01)
+icon_step = int(monitor.height * 0.04)
+
+# Pi camera
 picam2 = Picamera2()
-picam2.configure(picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (camera_param["width"], camera_param["height"])}))
+picam2.configure(picam2.create_preview_configuration(main={"format": 'RGB888', "size": (camera_param["width"], camera_param["height"])}))
+pprint(picam2.sensor_modes)
 picam2.start()
 
 cv2.namedWindow("window", cv2.WND_PROP_FULLSCREEN)
@@ -219,7 +239,7 @@ t_countdown = 0
 count_down_value = 0
 
 inIdle = True
-idle_timeout = 15 # in seconds
+idle_timeout = 120 # in seconds
 
 displayLast = False
 last_timeout = 5
@@ -227,7 +247,6 @@ last_timeout = 5
 # CPU temp monitooring vars
 temp_check_interval = 1 # in seconds
 t_prev_temp = 0
-cpu_temp = os.popen('vcgencmd measure_temp').readline()
 
 # Network check vars
 network_check_interval = 60 # in seconds
@@ -249,16 +268,18 @@ while True:
     if displayLast:
         im = im_filter
     else:
+        # capture using rpi camera
         im = picam2.capture_array()
+        
         # remove alpha layer
-        im = cv2.cvtColor(im, cv2.COLOR_BGRA2BGR)
+        #im = cv2.cvtColor(im, cv2.COLOR_BGRA2BGR)
 
         if REVERSED:
             # flip horizontaly
             im = cv2.flip(im, 1)
 
     # resize camera
-    resized = cv2.resize(copy.copy(im),(new_width,new_height))    
+    resized = cv2.resize(copy.copy(im),(new_width,new_height))
     # paste over background
     background[y_offset:new_height+y_offset, x_offset:new_width+x_offset] = resized
 
@@ -270,6 +291,14 @@ while True:
     pil_im =Image.fromarray(rgb)
     draw = ImageDraw.Draw(pil_im)
 
+    index_icons = 0
+    for i in icons.keys():
+        if icons[i]["displayed"]:
+            pos = (icon_padding + index_icons * icon_step, icon_padding)
+            pil_im.paste(icons[i]["image"], pos, icons[i]["image"])
+            index_icons += 1
+
+
     if DEBUG:
         # position text at 2% of the monitor width to the right edge
         x = monitor.width - int(monitor.width*0.02)
@@ -278,7 +307,7 @@ while True:
                  f"Photo count: {FILENAME_INDEX-1}",
                  f"Reversed: {REVERSED}",
                  f"Filtered: {FILTERED}",
-                 cpu_temp,
+                 f"Temperature: {cpu_temp}°C",
                  f"Disk used: {disk_used_space}%"]
 
         # print debug info
@@ -294,14 +323,15 @@ while True:
 
         if count_down_timeout - (time.time() - t_countdown) <= 0:
             # take picture
-            filename = f"photos/{FILENAME_BASE}{FILENAME_INDEX}.jpg"
-            filename_raw = f"raw/{FILENAME_BASE}{FILENAME_INDEX}.jpg"
+            time_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            filename = f"photos/{FILENAME_BASE}{time_stamp}.jpg"
+            filename_raw = f"raw/{FILENAME_BASE}{time_stamp}.jpg"
             FILENAME_INDEX += 1
 
             if FILTERED:
                 # save unfiltered image
-                cv2.imwrite(filename_raw, im)
-                
+                #cv2.imwrite(filename_raw, im)
+
                 # sepia filter
                 im_filter = sepia(im)
                 # add effect from file
@@ -310,12 +340,12 @@ while True:
                 im_filter = copy.copy(im)
 
             # save image to disk
-            cv2.imwrite(filename, im_filter)
+            #cv2.imwrite(filename, im_filter)
             # update disk space used
             disk_used_space = disk_usage('.').per_used
 
-            if USE_IMMICH:
-                upload(filename)
+            #if USE_IMMICH:
+                #upload(filename)
 
             inCountDown = False
             displayLast = True
@@ -343,6 +373,7 @@ while True:
     k = cv2.waitKey(1)
     if  k == 27 or k == ord('q'): #Esc
         cv2.destroyAllWindows()
+        picam2.stop()
         break
 
     elif not displayLast and not inCountDown and (k == 32 or button_line.get_value()): # space or button press
@@ -361,10 +392,56 @@ while True:
         FILTERED = not FILTERED
 
     # === Timers ===
+    # check temp
     if (time.time() - t_prev_temp) > temp_check_interval:
-        cpu_temp = os.popen('vcgencmd measure_temp').readline()
+        # function call to update var
+        cpu_temp = float(os.popen('vcgencmd measure_temp').readline().split("temp=")[1].split("'C")[0])
+
+        if 60 < cpu_temp < 65:
+            icons["temp_warning"]["displayed"] = True
+            icons["temp_critical"]["displayed"] = False
+        elif cpu_temp >= 65:
+            icons["temp_warning"]["displayed"] = False
+            icons["temp_critical"]["displayed"] = True
+        else:
+            icons["temp_warning"]["displayed"] = False
+            icons["temp_critical"]["displayed"] = False
+
+        # reset timmer
         t_prev_temp = time.time()
 
+    # check disk
     if (time.time() - t_prev_disk) > disk_check_interval:
+        # function call to update var
         disk_used_space = disk_usage('.').per_used
-        t_prev_temp = time.time()
+
+        # update logo status
+        if 70 < disk_used_space < 90:
+            icons["hdd_warning"]["displayed"] = True
+            icons["hdd_critical"]["displayed"] = False
+        elif disk_used_space >= 90:
+            icons["hdd_warning"]["displayed"] = False
+            icons["hdd_critical"]["displayed"] = True
+        else:
+            icons["hdd_warning"]["displayed"] = False
+            icons["hdd_critical"]["displayed"] = False
+
+        # reset timmer
+        t_prev_disk = time.time()
+
+    # check network
+    if (time.time() - t_prev_net) > network_check_interval:
+        # function call to update var
+        try:
+            response = requests.get(config["BASE_URL"].split("/api")[0])
+
+            # update logo status
+            if response.status_code != 200:
+                icons["no_network"]["displayed"] = True
+            else:
+                icons["no_network"]["displayed"] = False
+        except:
+            icons["no_network"]["displayed"] = True
+
+        # reset timmer
+        t_prev_net = time.time()
